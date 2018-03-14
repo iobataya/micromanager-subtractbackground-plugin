@@ -127,6 +127,7 @@ public class SubtractBackgroundProcessor extends DataProcessor<TaggedImage> {
 	 */
 	@Override
 	public void process() {
+		this.setName("SubtractBackground");
 		try {
 			TaggedImage nextImage = poll();
 			if (nextImage != TaggedImageQueue.POISON) {
