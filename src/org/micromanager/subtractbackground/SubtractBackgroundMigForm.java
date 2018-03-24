@@ -56,13 +56,13 @@ import org.micromanager.utils.ImageUtils;
 import org.micromanager.utils.MMDialog;
 import org.micromanager.utils.ReportingUtils;
 
-import org.micromanager.overlayarduino.*;
-
 import ij.IJ;
 import ij.ImagePlus;
 import ij.process.ImageProcessor;
 import mmcorej.TaggedImage;
 import net.miginfocom.swing.MigLayout;
+
+import org.micromanager.arduinoio.*;
 
 /**
  *
@@ -110,7 +110,8 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 			processor.makeConfigurationGUI();
 			mmStudio.getAcquisitionEngine().getImageProcessors().add(processor);
 
-			AcqByTtlMigForm arduino = new AcqByTtlMigForm(mmStudio);
+			ArduinoIoMigForm arduino = new ArduinoIoMigForm(mmStudio);
+			arduino.setVisible(true);
 		} catch (ClassNotFoundException e) {
 			ReportingUtils.showError(e, "A java error has caused Micro-Manager to exit.");
 			System.exit(1);
