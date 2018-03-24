@@ -76,7 +76,7 @@ public class SubtractBackgroundProcessor extends DataProcessor<TaggedImage> {
 
 		// Actual offset value = signal * (max value) / 100
 		int offsetValue = (ijType == ImagePlus.GRAY16) ? (int) (offsetPercent_ * 655.35)
-				: (int) (offsetPercent_ * 2.56);
+				: (int) (offsetPercent_ * 2.55);
 		ImageProcessor imp = ImageUtils.makeProcessor(nextImage);
 		imp = ImageUtils2.subtractImageProcessorsWithOffset(imp, backgroundImage_, offsetValue);
 		setStatus(MSG_DONE);

@@ -24,8 +24,6 @@ package org.micromanager.subtractbackground;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Insets;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.FocusEvent;
 import java.awt.event.FocusListener;
 import java.awt.event.WindowAdapter;
@@ -84,8 +82,6 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 	private final Dimension buttonSize_;
 	private final JLabel statusLabel_;
 	private final JButton snapButton_;
-	private final JTextField textBG;
-	private final JCheckBox chkTriggerSnap_;
 
 	private static final String LABEL_BACKGROUND = "Background Image";
 	private static final String LABEL_EXECUTE = "Subtract BG from acquired image ?";
@@ -110,7 +106,6 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 			processor.makeConfigurationGUI();
 			mmStudio.getAcquisitionEngine().getImageProcessors().add(processor);
 
-			AcqByTtlMigForm arduino = new AcqByTtlMigForm(mmStudio);
 		} catch (ClassNotFoundException e) {
 			ReportingUtils.showError(e, "A java error has caused Micro-Manager to exit.");
 			System.exit(1);
@@ -137,13 +132,6 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 		gui_ = gui;
 		mmc_ = gui_.getMMCore();
 		prefs_ = this.getPrefsNode();
-		try {
-			ArduinoPoller poller = ArduinoPoller.getInstance(gui_);
-			poller.addListener(this);
-		} catch (Exception ex) {
-			ReportingUtils.logError(ex);
-		}
-
 		this.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 		this.addWindowListener(new WindowAdapter() {
 			@Override
@@ -176,31 +164,12 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 		add(chkEnable_, "span 3, wrap");
 		add(statusLabel_, "span 3, wrap");
 
-		// Button BG
-		snapButton_ = new JButton("Snap BG and set");
-		snapButton_.setFont(this.fontSmallBold_);
-		snapButton_.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent evt) {
-				saveAndSetBackgroundImage();
-			}
-		});
-		chkTriggerSnap_ = new JCheckBox("Snap by rising of DigitalIn 1");
-		chkTriggerSnap_.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent evt) {
-
-			}
-		});
-		add(snapButton_);
-		add(chkTriggerSnap_, "wrap");
-
 		// Background image setting
 		JLabel darkImageLabel = new JLabel("BG Image:");
 		darkImageLabel.setFont(fontSmall_);
 		add(darkImageLabel);
 
-		textBG = new JTextField();
+		final JTextField textBG = new JTextField();
 		textBG.setFont(fontSmall_);
 		textBG.setText(prefs_.get(PREF_BG_PATH, ""));
 		textBG.setHorizontalAlignment(JTextField.RIGHT);
@@ -223,10 +192,15 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 		textBG.setText(processBackgroundImage(textBG.getText()));
 		add(textBG, "span 2, growx ");
 
+		// Button BG
+		snapButton_ = new JButton("SNAP", this.fontSmallBold_);
+		
+		add(snapButton_,"wrap");
+
 		// Select BG file
 		final JButton btnBG = mcsButton(buttonSize_, fontSmall_);
 		btnBG.setText("...");
-		btnBG.addActionListener(new ActionListener() {
+		btnBG.addActionListener(new java.awt.event.ActionListener() {
 			@Override
 			public void actionPerformed(java.awt.event.ActionEvent evt) {
 				File f = FileDialogs.openFile(mcsPluginWindow, LABEL_BACKGROUND,
@@ -238,6 +212,7 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 			}
 		});
 		add(btnBG, "wrap");
+		
 
 		// Offset spinner
 		JLabel offsetLabel = new JLabel(LABEL_OFFSET);
@@ -350,49 +325,36 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 	}
 
 	@Override
-	public void IsFallingAt1() {
+	public void IsRisingAt1() {
+		saveAndSetBackgroundImage();
 	}
 
 	@Override
-	public void IsRisingAt1() {
-		if (chkTriggerSnap_.isSelected()) {
-			saveAndSetBackgroundImage();
-		}
+	public void IsFallingAt1() {
 	}
 
-	public void saveAndSetBackgroundImage() {
-		// Disable enabled data processors
-		gui_.enableLiveMode(false);
-		while (gui_.isLiveModeOn()) {
-			try {
-				Thread.sleep(1);
-			} catch (InterruptedException e) {
-			}
-		}
+	public synchronized void saveAndSetBackgroundImage() {
+		// Disable enabled data processors 
 		List<DataProcessor<TaggedImage>> enabledProcessors = new ArrayList<DataProcessor<TaggedImage>>();
 		for (DataProcessor<TaggedImage> dp : gui_.getImageProcessorPipeline()) {
-			if (dp.getIsEnabled() == true) {
+			if(dp.getIsEnabled()==true) {
 				enabledProcessors.add(dp);
 				dp.setEnabled(false);
 			}
 		}
+		gui_.enableLiveMode(false);
 		try {
 			TaggedImage bg = mmc_.getLastTaggedImage();
 			ImageProcessor imp = ImageUtils.makeProcessor(bg);
 			ImagePlus ip = new ImagePlus("BG", imp);
 			File file = new File(backgroundFileName_);
 			String dir = file.getAbsoluteFile().getParent();
-			Timestamp ts = new Timestamp(System.currentTimeMillis());
-			String timeStamp = new SimpleDateFormat("yyyyMMdd-HHmmss").format(ts);
+			String timeStamp = new SimpleDateFormat("yyyyMMdd-HHmmss.fff")
+					.format(new Timestamp(System.currentTimeMillis()));
 			File newFile = new File(dir, timeStamp + "-BG.tiff");
 			IJ.saveAs(ip, "tiff", newFile.getAbsolutePath());
-			String openedFile = processBackgroundImage(newFile.getAbsolutePath());
-			if (openedFile.equals(newFile.getAbsolutePath())) {
-				textBG.setText(backgroundFileName_);
-			}
-
-			ReportingUtils.logMessage(openedFile + " was saved.");
-
+			processBackgroundImage(newFile.getAbsolutePath());
+			ReportingUtils.logMessage("Saved as " + newFile.getAbsolutePath());
 		} catch (Exception ex) {
 			ReportingUtils.logError("Couldnt get tagged image on rising at Digital1");
 		}
