@@ -138,13 +138,6 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 		gui_ = gui;
 		mmc_ = gui_.getMMCore();
 		prefs_ = this.getPrefsNode();
-		try {
-			ArduinoPoller poller = ArduinoPoller.getInstance(gui_);
-			poller.addListener(this);
-		} catch (Exception ex) {
-			ReportingUtils.logError(ex);
-		}
-
 		this.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 		this.addWindowListener(new WindowAdapter() {
 			@Override
@@ -263,6 +256,14 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 			}
 		});
 		add(offsetSpinner, "growx, wrap");
+		
+		// Setup ArduinoPoller and listener
+		try {
+			ArduinoPoller poller = ArduinoPoller.getInstance(gui_);
+			poller.addListener(this);
+		} catch (Exception ex) {
+			ReportingUtils.logError(ex);
+		}
 	}
 
 	@Override
@@ -364,12 +365,7 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 	public void saveAndSetBackgroundImage() {
 		// Disable enabled data processors
 		gui_.enableLiveMode(false);
-		while (gui_.isLiveModeOn()) {
-			try {
-				Thread.sleep(1);
-			} catch (InterruptedException e) {
-			}
-		}
+		
 		List<DataProcessor<TaggedImage>> enabledProcessors = new ArrayList<DataProcessor<TaggedImage>>();
 		for (DataProcessor<TaggedImage> dp : gui_.getImageProcessorPipeline()) {
 			if (dp.getIsEnabled() == true) {
