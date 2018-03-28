@@ -45,7 +45,6 @@ import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
-import javax.swing.UnsupportedLookAndFeelException;
 import javax.swing.WindowConstants;
 
 import org.micromanager.MMStudio;
@@ -53,28 +52,30 @@ import org.micromanager.api.DataProcessor;
 import org.micromanager.api.ScriptInterface;
 import org.micromanager.utils.FileDialogs;
 import org.micromanager.utils.ImageUtils;
+import org.micromanager.utils.MDUtils;
 import org.micromanager.utils.MMDialog;
 import org.micromanager.utils.ReportingUtils;
 
 import ij.IJ;
 import ij.ImagePlus;
+import ij.process.ByteProcessor;
 import ij.process.ImageProcessor;
+import ij.process.ShortProcessor;
 import mmcorej.TaggedImage;
 import net.miginfocom.swing.MigLayout;
-
-import org.micromanager.arduinoio.*;
 
 /**
  *
  */
 @SuppressWarnings("serial")
-public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputListener {
+public class SubtractBackgroundMigForm extends MMDialog {
 	private MMDialog mcsPluginWindow;
 	private final ScriptInterface gui_;
 	private final mmcorej.CMMCore mmc_;
 	private final Preferences prefs_;
 	private final SubtractBackgroundProcessor processor_;
-	private static SpinnerNumberModel spinner_;
+	private static SpinnerNumberModel spinnerOffsetModel_;
+	private static SpinnerNumberModel spinnerAverageModel_;
 	private final String[] IMAGESUFFIXES = { "tif", "tiff", "jpg", "png" };
 	private String backgroundFileName_;
 	private String statusMessage_;
@@ -85,15 +86,16 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 	private final JLabel statusLabel_;
 	private final JButton snapButton_;
 	private final JTextField textBG;
-	private final JCheckBox chkTriggerSnap_;
 
 	private static final String LABEL_BACKGROUND = "Background Image";
 	private static final String LABEL_EXECUTE = "Subtract BG from acquired image ?";
+	private static final String LABEL_AVR = "BG averaging count:";
 	private static final String LABEL_OFFSET = "+ Offset (%): ";
 	private static final String LABEL_NONE = "None";
 	private static final String PREF_OFFSET = "OffsetValue";
 	private static final String PREF_ENABLE = "UseSubtractBG";
 	private static final String PREF_BG_PATH = "BackgroundFileName";
+	private static final String PREF_AVR_COUNT = "AverageAccumCount";
 	private static final String ERR_SUBTRACTION = "Failed to set background image";
 
 	/**
@@ -109,26 +111,13 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 			processor.setApp(mmStudio);
 			processor.makeConfigurationGUI();
 			mmStudio.getAcquisitionEngine().getImageProcessors().add(processor);
-
-			ArduinoIoMigForm arduino = new ArduinoIoMigForm(mmStudio);
-			arduino.setVisible(true);
-		} catch (ClassNotFoundException e) {
-			ReportingUtils.showError(e, "A java error has caused Micro-Manager to exit.");
-			System.exit(1);
-		} catch (IllegalAccessException e) {
-			ReportingUtils.showError(e, "A java error has caused Micro-Manager to exit.");
-			System.exit(1);
-		} catch (InstantiationException e) {
-			ReportingUtils.showError(e, "A java error has caused Micro-Manager to exit.");
-			System.exit(1);
-		} catch (UnsupportedLookAndFeelException e) {
-			ReportingUtils.showError(e, "A java error has caused Micro-Manager to exit.");
-			System.exit(1);
+		} catch (Exception e) {
+			ReportingUtils.logError(e);
 		}
 	}
 
 	/**
-	 * Creates new form MultiChannelShadingForm
+	 * Creates new form SubtractBG form
 	 * 
 	 * @param processor
 	 * @param gui
@@ -149,7 +138,6 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 		fontSmallBold_ = new Font("Arial", Font.BOLD, 14);
 		buttonSize_ = new Dimension(70, 21);
 		loadAndRestorePosition(100, 100, 350, 250);
-
 		mcsPluginWindow = this;
 		this.setLayout(new MigLayout("flowx, fill, insets 8"));
 		this.setTitle(SubtractBackground.menuName);
@@ -172,27 +160,18 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 
 		// Button BG
 		snapButton_ = new JButton("Snap BG and set");
-		snapButton_.setFont(this.fontSmallBold_);
+		snapButton_.setFont(fontSmallBold_);
 		snapButton_.addActionListener(new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent evt) {
 				saveAndSetBackgroundImage();
 			}
 		});
-		chkTriggerSnap_ = new JCheckBox("Snap by rising of DigitalIn 1");
-		chkTriggerSnap_.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent evt) {
-
-			}
-		});
-		add(snapButton_);
-		add(chkTriggerSnap_, "wrap");
+		add(snapButton_,"wrap");
 
 		// Background image setting
 		JLabel darkImageLabel = new JLabel("BG Image:");
 		darkImageLabel.setFont(fontSmall_);
-		add(darkImageLabel);
 
 		textBG = new JTextField();
 		textBG.setFont(fontSmall_);
@@ -215,8 +194,7 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 			}
 		});
 		textBG.setText(processBackgroundImage(textBG.getText()));
-		add(textBG, "span 2, growx ");
-
+		
 		// Select BG file
 		final JButton btnBG = mcsButton(buttonSize_, fontSmall_);
 		btnBG.setText("...");
@@ -231,7 +209,34 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 				}
 			}
 		});
+		add(darkImageLabel);
+		add(textBG, "span 2, growx");
 		add(btnBG, "wrap");
+
+		// Averager spinner
+		JLabel lblAvr = new JLabel(LABEL_AVR);
+		lblAvr.setFont(fontSmall_);
+
+		final JSpinner avrSpinner = new JSpinner();
+		avrSpinner.setFont(fontSmall_);
+		try {
+			double avrCount = prefs_.getDouble(PREF_AVR_COUNT, 64);
+			spinnerAverageModel_ = new SpinnerNumberModel(avrCount, 1, 1000, 1);
+		} catch (IllegalArgumentException e) {
+			spinnerAverageModel_ = new SpinnerNumberModel(64, 1, 1000, 1);
+			prefs_.putDouble(PREF_AVR_COUNT, 64);
+		}
+
+		avrSpinner.setModel(spinnerAverageModel_);
+		avrSpinner.addChangeListener(new javax.swing.event.ChangeListener() {
+			@Override
+			public void stateChanged(javax.swing.event.ChangeEvent evt) {
+				double v = (Double) avrSpinner.getValue();
+				prefs_.putDouble(PREF_AVR_COUNT, v);
+			}
+		});
+		add(lblAvr);
+		add(avrSpinner, "growx, wrap");
 
 		// Offset spinner
 		JLabel offsetLabel = new JLabel(LABEL_OFFSET);
@@ -242,11 +247,12 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 		offsetSpinner.setFont(fontSmall_);
 		try {
 			double offsetPercent = prefs_.getDouble(PREF_OFFSET, processor_.getOffset());
-			spinner_ = new SpinnerNumberModel(offsetPercent, 0, 100, 0.5);
+			spinnerOffsetModel_ = new SpinnerNumberModel(offsetPercent, 0, 100, 0.5);
 		} catch (IllegalArgumentException e) {
-			spinner_ = new SpinnerNumberModel(processor_.getOffset(), 0, 100, 0.5);
+			spinnerOffsetModel_ = new SpinnerNumberModel(processor_.getOffset(), 0, 100, 0.5);
 		}
-		offsetSpinner.setModel(spinner_);
+		offsetSpinner.setModel(spinnerOffsetModel_);
+		processor_.setOffset((Double)offsetSpinner.getValue());
 		offsetSpinner.addChangeListener(new javax.swing.event.ChangeListener() {
 			@Override
 			public void stateChanged(javax.swing.event.ChangeEvent evt) {
@@ -256,14 +262,6 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 			}
 		});
 		add(offsetSpinner, "growx, wrap");
-		
-		// Setup ArduinoPoller and listener
-		try {
-			ArduinoPoller poller = ArduinoPoller.getInstance(gui_);
-			poller.addListener(this);
-		} catch (Exception ex) {
-			ReportingUtils.logError(ex);
-		}
 	}
 
 	@Override
@@ -339,33 +337,13 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 		prefs_.putBoolean(PREF_ENABLE, enabled);
 	}
 
-	@Override
-	public void ValueChanged(ArduinoInputEvent e) {
-	}
-
-	@Override
-	public void IsRisingAt0() {
-	}
-
-	@Override
-	public void IsFallingAt0() {
-	}
-
-	@Override
-	public void IsFallingAt1() {
-	}
-
-	@Override
-	public void IsRisingAt1() {
-		if (chkTriggerSnap_.isSelected()) {
-			saveAndSetBackgroundImage();
-		}
-	}
-
+	/**
+	 * Turn off processors, save and average background images, turn on processors.
+	 */
 	public void saveAndSetBackgroundImage() {
 		// Disable enabled data processors
 		gui_.enableLiveMode(false);
-		
+
 		List<DataProcessor<TaggedImage>> enabledProcessors = new ArrayList<DataProcessor<TaggedImage>>();
 		for (DataProcessor<TaggedImage> dp : gui_.getImageProcessorPipeline()) {
 			if (dp.getIsEnabled() == true) {
@@ -374,15 +352,52 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 			}
 		}
 		try {
+			// try first image.
 			TaggedImage bg = mmc_.getLastTaggedImage();
-			ImageProcessor imp = ImageUtils.makeProcessor(bg);
-			ImagePlus ip = new ImagePlus("BG", imp);
+			String type = MDUtils.getPixelType(bg.tags);
+			if (!(type.equals("GRAY8") || type.equals("GRAY16"))) {
+				ReportingUtils.showError("Image format error. Nothing saved.");
+				return;
+			}
+			int ijType = type.equals("GRAY16") ? ImagePlus.GRAY16 : ImagePlus.GRAY8;
+			int count = (int) prefs_.getDouble(PREF_AVR_COUNT, 1);
+			int height = MDUtils.getHeight(bg.tags);
+			int width = MDUtils.getWidth(bg.tags);
+			int pixelCount = height * width;
+			int[] sum = new int[pixelCount];
+
+			for (int i = 0; i < count; i++) {
+				mmc_.snapImage();
+				TaggedImage newTimage = mmc_.getLastTaggedImage();
+				ImageProcessor newIP = ImageUtils.makeProcessor(newTimage);
+				for (int j = 0; j < pixelCount; j++) {
+					sum[j] += (int) newIP.get(j);
+				}
+			}
+			ImageProcessor averagedImp;
+			if (ijType == ImagePlus.GRAY8) {
+				byte[] averaged = new byte[pixelCount];
+				for (int j = 0; j < pixelCount; j++) {
+					averaged[j] = (byte) (sum[j] / count);
+				}
+				averagedImp = new ByteProcessor(width, height);
+				averagedImp.setPixels(averaged);
+			} else {
+				short[] averaged = new short[pixelCount];
+				for (int j = 0; j < pixelCount; j++) {
+					averaged[j] = (short) (sum[j] / count);
+				}
+				averagedImp = new ShortProcessor(width, height);
+				averagedImp.setPixels(averaged);
+			}
+
 			File file = new File(backgroundFileName_);
 			String dir = file.getAbsoluteFile().getParent();
 			Timestamp ts = new Timestamp(System.currentTimeMillis());
 			String timeStamp = new SimpleDateFormat("yyyyMMdd-HHmmss").format(ts);
-			File newFile = new File(dir, timeStamp + "-BG.tiff");
-			IJ.saveAs(ip, "tiff", newFile.getAbsolutePath());
+			File newFile = new File(dir, timeStamp + "-BG" + String.valueOf(count) + ".tiff");
+			IJ.saveAs(new ImagePlus("BG", averagedImp), "tiff", newFile.getAbsolutePath());
+
 			String openedFile = processBackgroundImage(newFile.getAbsolutePath());
 			if (openedFile.equals(newFile.getAbsolutePath())) {
 				textBG.setText(backgroundFileName_);
@@ -390,7 +405,9 @@ public class SubtractBackgroundMigForm extends MMDialog implements ArduinoInputL
 
 			ReportingUtils.logMessage(openedFile + " was saved.");
 
-		} catch (Exception ex) {
+		} catch (
+
+		Exception ex) {
 			ReportingUtils.logError("Couldnt get tagged image on rising at Digital1");
 		}
 		// Enable disabled data processor
