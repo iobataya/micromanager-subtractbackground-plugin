@@ -369,6 +369,7 @@ public class SubtractBackgroundMigForm extends MMDialog {
 			for (int i = 0; i < count; i++) {
 				mmc_.snapImage();
 				TaggedImage newTimage = mmc_.getLastTaggedImage();
+				// TODO: perhaps does it colelct an identical image here ?
 				ImageProcessor newIP = ImageUtils.makeProcessor(newTimage);
 				for (int j = 0; j < pixelCount; j++) {
 					sum[j] += (int) newIP.get(j);
