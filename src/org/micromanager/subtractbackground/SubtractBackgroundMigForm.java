@@ -49,6 +49,7 @@ import javax.swing.WindowConstants;
 
 import org.micromanager.MMStudio;
 import org.micromanager.api.DataProcessor;
+import org.micromanager.api.ImageCache;
 import org.micromanager.api.ScriptInterface;
 import org.micromanager.utils.FileDialogs;
 import org.micromanager.utils.ImageUtils;
@@ -366,14 +367,25 @@ public class SubtractBackgroundMigForm extends MMDialog {
 			int pixelCount = height * width;
 			int[] sum = new int[pixelCount];
 
+			boolean wasLiveModeOn = gui_.isLiveModeOn();
+			if(wasLiveModeOn) {
+				gui_.enableLiveMode(false);
+			}
+			// Collect background images from cache.
+			// If exposure is 30ms, images are collected 3sec before.
 			for (int i = 0; i < count; i++) {
-				mmc_.snapImage();
-				TaggedImage newTimage = mmc_.getLastTaggedImage();
-				// TODO: perhaps does it colelct an identical image here ?
-				ImageProcessor newIP = ImageUtils.makeProcessor(newTimage);
+				TaggedImage newImage = mmc_.getNBeforeLastTaggedImage((long)i);
+				// for logging
+				// short[] pixels = (short[]) newImage.pix;
+				// ReportingUtils.logDebugMessage(String.valueOf(i)+":"+String.valueOf(pixels[0]));
+				ImageProcessor newIP = ImageUtils.makeProcessor(newImage);
 				for (int j = 0; j < pixelCount; j++) {
 					sum[j] += (int) newIP.get(j);
 				}
+			}
+//			ReportingUtils.logDebugMessage("sum:"+String.valueOf(sum[0]));
+			if(wasLiveModeOn) {
+				gui_.enableLiveMode(true);
 			}
 			ImageProcessor averagedImp;
 			if (ijType == ImagePlus.GRAY8) {
@@ -393,10 +405,10 @@ public class SubtractBackgroundMigForm extends MMDialog {
 			}
 
 			File file = new File(backgroundFileName_);
-			String dir = file.getAbsoluteFile().getParent();
+			File parentDir = new File(file.getAbsoluteFile().getParent());
 			Timestamp ts = new Timestamp(System.currentTimeMillis());
 			String timeStamp = new SimpleDateFormat("yyyyMMdd-HHmmss").format(ts);
-			File newFile = new File(dir, timeStamp + "-BG" + String.valueOf(count) + ".tiff");
+			File newFile = new File(parentDir.getAbsolutePath(), timeStamp + "-BG" + String.valueOf(count) + ".tiff");
 			IJ.saveAs(new ImagePlus("BG", averagedImp), "tiff", newFile.getAbsolutePath());
 
 			String openedFile = processBackgroundImage(newFile.getAbsolutePath());
