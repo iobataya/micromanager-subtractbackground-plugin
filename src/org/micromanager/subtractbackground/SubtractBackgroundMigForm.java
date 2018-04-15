@@ -21,6 +21,8 @@
 
 package org.micromanager.subtractbackground;
 
+import java.awt.BorderLayout;
+import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Insets;
@@ -39,7 +41,9 @@ import java.util.prefs.Preferences;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JProgressBar;
 import javax.swing.JSpinner;
 import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
@@ -49,13 +53,13 @@ import javax.swing.WindowConstants;
 
 import org.micromanager.MMStudio;
 import org.micromanager.api.DataProcessor;
-import org.micromanager.api.ImageCache;
 import org.micromanager.api.ScriptInterface;
 import org.micromanager.utils.FileDialogs;
 import org.micromanager.utils.ImageUtils;
 import org.micromanager.utils.MDUtils;
 import org.micromanager.utils.MMDialog;
 import org.micromanager.utils.ReportingUtils;
+import org.micromanager.utils.WaitDialog;
 
 import ij.IJ;
 import ij.ImagePlus;
@@ -87,6 +91,7 @@ public class SubtractBackgroundMigForm extends MMDialog {
 	private final JLabel statusLabel_;
 	private final JButton snapButton_;
 	private final JTextField textBG;
+	private long fpsInterval_;
 
 	private static final String LABEL_BACKGROUND = "Background Image";
 	private static final String LABEL_EXECUTE = "Subtract BG from acquired image ?";
@@ -168,7 +173,7 @@ public class SubtractBackgroundMigForm extends MMDialog {
 				saveAndSetBackgroundImage();
 			}
 		});
-		add(snapButton_,"wrap");
+		add(snapButton_, "wrap");
 
 		// Background image setting
 		JLabel darkImageLabel = new JLabel("BG Image:");
@@ -195,7 +200,7 @@ public class SubtractBackgroundMigForm extends MMDialog {
 			}
 		});
 		textBG.setText(processBackgroundImage(textBG.getText()));
-		
+
 		// Select BG file
 		final JButton btnBG = mcsButton(buttonSize_, fontSmall_);
 		btnBG.setText("...");
@@ -253,7 +258,7 @@ public class SubtractBackgroundMigForm extends MMDialog {
 			spinnerOffsetModel_ = new SpinnerNumberModel(processor_.getOffset(), 0, 100, 0.5);
 		}
 		offsetSpinner.setModel(spinnerOffsetModel_);
-		processor_.setOffset((Double)offsetSpinner.getValue());
+		processor_.setOffset((Double) offsetSpinner.getValue());
 		offsetSpinner.addChangeListener(new javax.swing.event.ChangeListener() {
 			@Override
 			public void stateChanged(javax.swing.event.ChangeEvent evt) {
@@ -342,9 +347,7 @@ public class SubtractBackgroundMigForm extends MMDialog {
 	 * Turn off processors, save and average background images, turn on processors.
 	 */
 	public void saveAndSetBackgroundImage() {
-		// Disable enabled data processors
-		gui_.enableLiveMode(false);
-
+		// Disable current enabled data processors
 		List<DataProcessor<TaggedImage>> enabledProcessors = new ArrayList<DataProcessor<TaggedImage>>();
 		for (DataProcessor<TaggedImage> dp : gui_.getImageProcessorPipeline()) {
 			if (dp.getIsEnabled() == true) {
@@ -352,6 +355,14 @@ public class SubtractBackgroundMigForm extends MMDialog {
 				dp.setEnabled(false);
 			}
 		}
+		fpsInterval_ = getInterval();
+		boolean wasLiveModeOn = gui_.isLiveModeOn();
+		if (wasLiveModeOn) {
+			gui_.enableLiveMode(false);
+		}
+		final WaitDialog waitDlg = new WaitDialog("Averaging background images...");
+		waitDlg.setAlwaysOnTop(true);
+		waitDlg.showDialog();
 		try {
 			// try first image.
 			TaggedImage bg = mmc_.getLastTaggedImage();
@@ -366,26 +377,14 @@ public class SubtractBackgroundMigForm extends MMDialog {
 			int width = MDUtils.getWidth(bg.tags);
 			int pixelCount = height * width;
 			int[] sum = new int[pixelCount];
-
-			boolean wasLiveModeOn = gui_.isLiveModeOn();
-			if(wasLiveModeOn) {
-				gui_.enableLiveMode(false);
-			}
-			// Collect background images from cache.
-			// If exposure is 30ms, images are collected 3sec before.
 			for (int i = 0; i < count; i++) {
-				TaggedImage newImage = mmc_.getNBeforeLastTaggedImage((long)i);
-				// for logging
-				// short[] pixels = (short[]) newImage.pix;
-				// ReportingUtils.logDebugMessage(String.valueOf(i)+":"+String.valueOf(pixels[0]));
-				ImageProcessor newIP = ImageUtils.makeProcessor(newImage);
+				mmc_.snapImage();
+				TaggedImage ti = mmc_.getTaggedImage();
+				ImageProcessor newIP = ImageUtils.makeProcessor(ti);
 				for (int j = 0; j < pixelCount; j++) {
 					sum[j] += (int) newIP.get(j);
 				}
-			}
-//			ReportingUtils.logDebugMessage("sum:"+String.valueOf(sum[0]));
-			if(wasLiveModeOn) {
-				gui_.enableLiveMode(true);
+				Thread.sleep(fpsInterval_);
 			}
 			ImageProcessor averagedImp;
 			if (ijType == ImagePlus.GRAY8) {
@@ -404,8 +403,8 @@ public class SubtractBackgroundMigForm extends MMDialog {
 				averagedImp.setPixels(averaged);
 			}
 
-			File file = new File(backgroundFileName_);
-			File parentDir = new File(file.getAbsoluteFile().getParent());
+			File tmpFile = new File(backgroundFileName_);
+			File parentDir = (tmpFile.isDirectory()) ? tmpFile : new File(tmpFile.getAbsoluteFile().getParent());
 			Timestamp ts = new Timestamp(System.currentTimeMillis());
 			String timeStamp = new SimpleDateFormat("yyyyMMdd-HHmmss").format(ts);
 			File newFile = new File(parentDir.getAbsolutePath(), timeStamp + "-BG" + String.valueOf(count) + ".tiff");
@@ -415,18 +414,70 @@ public class SubtractBackgroundMigForm extends MMDialog {
 			if (openedFile.equals(newFile.getAbsolutePath())) {
 				textBG.setText(backgroundFileName_);
 			}
-
 			ReportingUtils.logMessage(openedFile + " was saved.");
-
-		} catch (
-
-		Exception ex) {
-			ReportingUtils.logError("Couldnt get tagged image on rising at Digital1");
+		} catch (Exception ex) {
+			ReportingUtils.logError("Couldnt get tagged image.");
+		} finally {
+			waitDlg.closeDialog();
+			if (wasLiveModeOn) {
+				gui_.enableLiveMode(true);
+			}
 		}
-		// Enable disabled data processor
+
+		// Enable formerly disabled data processors
 		for (DataProcessor<TaggedImage> dp : enabledProcessors) {
 			dp.setEnabled(true);
 		}
-		gui_.enableLiveMode(true);
+	}
+
+	/**
+	 * Determines the optimum interval for the live mode timer task to happen Also
+	 * sets variable fpsInterval_
+	 */
+	private long getInterval() {
+		double interval = 20;
+		try {
+			interval = Math.max(mmc_.getExposure(), interval);
+		} catch (Exception e) {
+			ReportingUtils.logError("Unable to get exposure from core");
+		}
+		fpsInterval_ = (long) (20 * interval);
+		if (fpsInterval_ < 1000)
+			fpsInterval_ = 1000;
+
+		return (int) interval;
+	}
+
+	public class ProgressBar extends JFrame {
+
+		private JProgressBar progressBar;
+
+		public ProgressBar(String msg, int start, int end) {
+			super(msg);
+			setSize(300, 200);
+			Container content = getContentPane();
+			content.setLayout(new BorderLayout());
+			progressBar = new JProgressBar();
+			progressBar.setMinimum(start);
+			progressBar.setMaximum(end);
+			progressBar.setStringPainted(true);
+			progressBar.setBorder(null);
+			content.add(progressBar, BorderLayout.CENTER);
+			setVisible(true);
+		}
+
+		void updateProgress(int newValue) {
+			progressBar.setValue(newValue);
+		}
+
+		public void setValue(final int j) {
+			SwingUtilities.invokeLater(new Runnable() {
+				@Override
+				public void run() {
+					updateProgress(j);
+					repaint();
+				}
+			});
+		}
 	}
 }
